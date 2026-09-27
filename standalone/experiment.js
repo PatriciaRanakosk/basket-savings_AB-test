@@ -25,6 +25,8 @@
   let processing = false;
   let rerunRequested = false;
 
+
+  // Price helpers
   function parsePrice(value) {
     const parsed = Number(
       String(value || '')
@@ -43,6 +45,8 @@
     return Math.round((value + Number.EPSILON) * 100) / 100;
   }
 
+
+  // Basket helpers
   function getAllLineItems() {
     return Array.from(document.querySelectorAll(SELECTORS.lineItems));
   }
@@ -55,6 +59,12 @@
     return getAllLineItems().filter(item => getSku(item) === sku);
   }
 
+
+  /*
+   * Quantity can come from different DOM structures depending
+   * on the breakpoint. Mobile exposes the selected quantity
+   * through aria-label, with fallbacks for desktop/other states.
+   */
   function getQuantity(lineItem, sku) {
     const root = lineItem.querySelector(SELECTORS.quantity);
 
@@ -74,8 +84,10 @@
         : root.querySelector('[role="combobox"]');
 
       if (combo) {
-        // Mobile quantity is exposed through aria-label
-        const ariaLabelQuantity = parseInt(combo.getAttribute('aria-label'), 10);
+        const ariaLabelQuantity = parseInt(
+          combo.getAttribute('aria-label'),
+          10
+        );
 
         if (Number.isFinite(ariaLabelQuantity) && ariaLabelQuantity > 0) {
           return ariaLabelQuantity;
@@ -130,6 +142,7 @@
     return 1;
   }
 
+
   function getProductUrl(elements) {
     for (const element of elements) {
       const link = element.querySelector(SELECTORS.productLink);
@@ -139,7 +152,7 @@
       }
     }
 
-    // Some product links sit higher in the line item structure
+    // Fallback for product links that sit higher in the line item structure
     for (const element of elements) {
       const skuElement = element.querySelector(SELECTORS.sku);
       let parent = skuElement?.parentElement;
@@ -160,6 +173,12 @@
     return null;
   }
 
+
+  /*
+   * Both desktop and mobile line items can exist in the DOM at
+   * the same time. Grouping by SKU prevents the same product
+   * from being included twice in the calculations.
+   */
   function readBasket() {
     const groups = new Map();
 
@@ -181,7 +200,6 @@
     const products = [];
 
     groups.forEach((elements, sku) => {
-      // Desktop and mobile can both exist in the DOM, so use the visible one
       const source =
         elements.find(element => element.offsetParent !== null) || elements[0];
 
@@ -197,9 +215,18 @@
 
       const quantity = getQuantity(source, sku);
 
-      // lineItemNowPrice is already the total for the selected quantity
+      /*
+       * lineItemNowPrice already contains the full line value
+       * for the selected quantity, so it must not be multiplied
+       * by quantity again.
+       */
       const currentLineTotal = parsePrice(nowElement.textContent);
 
+      /*
+       * A Was price can also be introduced after a voucher is
+       * applied. Capture it here, but classify the saving later
+       * so voucher discounts are not counted twice.
+       */
       const basketWasElement = source.querySelector(SELECTORS.wasPrice);
       let basketWasLineTotal = null;
 
@@ -223,6 +250,12 @@
     return products;
   }
 
+
+  /*
+   * PDP data is used as the source of truth for discounts that
+   * existed before a basket voucher was applied. Results are
+   * cached by SKU to avoid fetching the same PDP repeatedly.
+   */
   async function getPdpPricing(productUrl, sku) {
     if (!productUrl) {
       return null;
@@ -275,6 +308,11 @@
     return request;
   }
 
+
+  /*
+   * Product saving only represents the original PDP discount.
+   * Voucher discounts are kept separate to avoid double counting.
+   */
   async function calculateProduct(product) {
     const pdp = await getPdpPricing(product.productUrl, product.sku);
 
@@ -304,7 +342,11 @@
 
     let productSaving = 0;
 
-    // Keep the PDP discount separate from any voucher discount
+    /*
+     * Calculate the original product discount independently from
+     * the basket's current price because that price may already
+     * include an additional voucher discount.
+     */
     if (percentage > 0) {
       productSaving = roundMoney(
         productWasLineTotal * (percentage / 100)
@@ -338,6 +380,8 @@
     };
   }
 
+
+  // Render the saving message against every matching responsive line item
   function renderProduct(result) {
     const elements = getElementsForSku(result.sku);
 
@@ -384,6 +428,7 @@
     });
   }
 
+
   function getNativeTotal() {
     const totals = Array.from(
       document.querySelectorAll(SELECTORS.total)
@@ -408,6 +453,12 @@
     return 0;
   }
 
+
+  /*
+   * Read the site's native voucher Saving rather than deriving
+   * it from line item prices. This keeps voucher savings separate
+   * from the product savings calculated from PDP data.
+   */
   function getVoucherSaving() {
     const elements = Array.from(
       document.querySelectorAll(SELECTORS.voucherSaving)
@@ -438,8 +489,13 @@
     return 0;
   }
 
+
   function renderTotals(productSaving, voucherSaving, nativeTotal) {
-    // Reconstruct the basket value before either type of discount
+    /*
+     * Reconstruct the original basket value:
+     *
+     * final total + voucher saving + product saving
+     */
     const fullPriceSubtotal = roundMoney(
       nativeTotal + voucherSaving + productSaving
     );
@@ -484,6 +540,12 @@
     });
   }
 
+
+  /*
+   * Disconnect the observer while we render our own changes.
+   * Otherwise those changes would trigger another update and
+   * create a MutationObserver loop.
+   */
   function disconnectObserver() {
     if (observer && observerConnected) {
       observer.disconnect();
@@ -494,7 +556,6 @@
   function connectObserver() {
     if (!observer) {
       observer = new MutationObserver(mutations => {
-        // Ignore DOM changes made by the experiment itself
         const relevant = mutations.some(mutation => {
           const target = mutation.target;
 
@@ -530,6 +591,12 @@
     observerConnected = true;
   }
 
+
+  /*
+   * Recalculate from the current DOM whenever the basket changes.
+   * This covers quantity updates, removals, voucher changes and
+   * products added without a full page refresh.
+   */
   async function updateBasket() {
     if (processing) {
       rerunRequested = true;
@@ -546,7 +613,7 @@
         return;
       }
 
-      // Capture native values before changing the DOM
+      // Capture native values before changing anything in the DOM
       const nativeTotal = getNativeTotal();
       const voucherSaving = getVoucherSaving();
 
@@ -563,11 +630,7 @@
         )
       );
 
-      renderTotals(
-        productSaving,
-        voucherSaving,
-        nativeTotal
-      );
+      renderTotals(productSaving, voucherSaving, nativeTotal);
     } catch (error) {
       console.error('Basket Savings experiment failed.', error);
     } finally {
@@ -581,11 +644,18 @@
     }
   }
 
+
+  // Debounce rapid React DOM changes into a single recalculation
   function scheduleUpdate(delay = 500) {
     clearTimeout(updateTimer);
     updateTimer = setTimeout(updateBasket, delay);
   }
 
+
+  /*
+   * The basket is React rendered, so wait until the required
+   * pricing elements exist before running the experiment.
+   */
   function waitForBasket() {
     const basketReady =
       document.querySelector(SELECTORS.nowPrice) &&
@@ -615,6 +685,10 @@
     });
   }
 
+
+  /*
+   * Styles are injected here 
+   */
   function injectStyles() {
     document.getElementById('basket-savings-styles')?.remove();
 
@@ -667,6 +741,7 @@
 
     document.head.appendChild(style);
   }
+
 
   injectStyles();
   waitForBasket();
