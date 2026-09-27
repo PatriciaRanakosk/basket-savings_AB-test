@@ -1,5 +1,6 @@
 /*
- * Basket Savings Experiment
+ * Product saving message
+ * Displays the discount percentage and original line price.
  */
 
 .basket-savings-product {
@@ -24,6 +25,11 @@
 }
 
 
+/*
+ * Basket level Product saving row.
+ * Inserted above the existing Total row.
+ */
+
 .basket-savings-total {
   display: flex;
   justify-content: space-between;
@@ -35,12 +41,12 @@
   line-height: 1.4;
 }
 
-.basket-savings-total__label {
+.basket-savings-total__label,
+.basket-savings-total__amount {
   color: #398536;
   font-weight: 500;
 }
 
 .basket-savings-total__amount {
-  color: #398536;
   font-weight: 700;
 }
